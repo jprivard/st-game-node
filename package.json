@@ -1,0 +1,32 @@
+{
+  "name": "startrek-game",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node api/server.js",
+    "test": "find . -name '*.spec.js' | xargs mocha -R spec",
+    "create-network": "docker network create game",
+    "api-build": "docker image build -t game-api .",
+    "api-start": "docker run --rm -p 80:3000 --network game --name api game-api"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^3.0.6",
+    "body-parser": "^1.18.3",
+    "connect-ensure-login": "^0.1.1",
+    "express": "^4.16.4",
+    "express-session": "^1.16.2",
+    "http": "0.0.0",
+    "mysql2": "^1.6.5",
+    "passport": "^0.4.0",
+    "passport-local": "^1.0.0",
+    "socket.io": "^2.2.0"
+  },
+  "devDependencies": {
+    "chai": "^4.2.0",
+    "mocha": "^6.2.0",
+    "sinon": "^7.3.1"
+  }
+}
