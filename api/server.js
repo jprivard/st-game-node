@@ -9,6 +9,7 @@ const io = require('socket.io')(http);
 const UserFactory = require('./models/user').factory;
 const ensureLoggedIn = require('connect-ensure-login').ensureLoggedIn;
 const environment = require('../environments/environment.local');
+const cors = require('cors')
 
 async function main() {
   // Configure MySQL Connection
@@ -52,6 +53,7 @@ async function main() {
   app.use(require('express-session')({ secret: 'keyboard cat', resave: false, saveUninitialized: false }));
   app.use(passport.initialize());
   app.use(passport.session());
+  app.use(cors());
 
   // Configure basic SocketIO commands
   io.on('connection', socket => {
@@ -79,15 +81,17 @@ async function main() {
       }
       req.logIn(user, (err) => {
         if (err) return next(err);
-        return res.redirect('/auth/');
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ user: user }, null, 3));    
       });
     })(req, res, next);  
   });
     
   app.get('/auth/logout', (req, res) => {
     req.logout();
-    res.redirect('/auth/');
-  });
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ }, null, 3));    
+});
   
   app.get('/auth/profile', ensureLoggedIn('/auth/'), (req, res) => {
     res.setHeader('Content-Type', 'application/json');
