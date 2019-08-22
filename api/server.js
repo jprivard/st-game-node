@@ -79,8 +79,10 @@ async function main() {
         res.end(JSON.stringify({ error: 'AUTH.INVALID' }, null, 3));  
         return res;
       }
-      req.logIn(user, (err) => {
+      req.logIn(user, async(err) => {
         if (err) return next(err);
+        const sql = `UPDATE accounts SET lastConnection='${ (new Date(Date.now())).toISOString().replace('T', ' ').split('.')[0] }' WHERE id = ${ user.id };`;
+        await db.execute(sql);
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ user: user }, null, 3));    
       });
@@ -107,12 +109,13 @@ async function main() {
     const [rows] = await db.execute(sql);
     const characters = await Promise.all(rows.map(async row => {
       const character = characterSerializer(row);
-      const sql = `SELECT p.text, s.name FROM assignments a
+      const sql = `SELECT p.text, s.name, a.active, a.start, a.end FROM assignments a
       INNER JOIN ships s ON s.id = a.ship
       INNER JOIN positions p ON p.id = a.position
-      WHERE a.character = ${character.id};`;
+      WHERE a.character = ${character.id}
+      ORDER BY a.start DESC;`;
       const [rows] = await db.execute(sql);
-      character.assignments = rows.map(row => ({ position: row.text, ship: row.name }));
+      character.assignments = assignmentsSerializer(rows);
       return character;
     }));
     res.setHeader('Content-Type', 'application/json');
@@ -121,6 +124,19 @@ async function main() {
   
   const server = app.listen(3000);
   io.listen(server);
+}
+
+const assignmentsSerializer = rows => {
+  const assignments =  { active: [], past: [] };
+  rows.forEach(row => {
+    assignments[row.active ? 'active' : 'past'].push({
+      position: row.text,
+      ship: row.name,
+      start: row.start,
+      end: row.end
+    });
+  });
+  return assignments;
 }
 
 const characterSerializer = row => ({
