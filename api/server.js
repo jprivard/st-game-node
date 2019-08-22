@@ -99,16 +99,38 @@ async function main() {
   });
 
   app.get('/characters', ensureLoggedIn('/auth/'), async(req, res) => {
-    const sql = `SELECT c.id, c.first_name, c.last_name, c.race as race_id, r.text as race_text
+    const sql = `SELECT c.id, k.id as rank_id, k.text as rank_text, c.firstName, c.lastName, c.sdob, c.race as race_id, r.text as race_text
     FROM characters c
-    INNER JOIN races r ON c.race = r.id;`;
+    INNER JOIN races r ON c.race = r.id
+    INNER JOIN ranks k ON c.rank = k.id
+    WHERE c.account = ${req.user.id};`;
     const [rows] = await db.execute(sql);
+    const characters = await Promise.all(rows.map(async row => {
+      const character = characterSerializer(row);
+      const sql = `SELECT p.text, s.name FROM assignments a
+      INNER JOIN ships s ON s.id = a.ship
+      INNER JOIN positions p ON p.id = a.position
+      WHERE a.character = ${character.id};`;
+      const [rows] = await db.execute(sql);
+      character.assignments = rows.map(row => ({ position: row.text, ship: row.name }));
+      return character;
+    }));
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ characters: rows.map(row => ({ ...row, race: {id: row.race_id, text: row.race_text }, race_id: undefined, race_text: undefined })) }, null, 3));
+    res.end(JSON.stringify({ characters }, null, 3));
   });
   
   const server = app.listen(3000);
   io.listen(server);
 }
+
+const characterSerializer = row => ({
+  id: row.id,
+  rank: row.rank_text,
+  firstName: row.firstName,
+  lastName: row.lastName,
+  race: row.race_text,
+  stardateOfBirth: row.sdob,
+  assignments : []
+});
 
 main();
