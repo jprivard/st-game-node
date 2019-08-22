@@ -19,7 +19,7 @@ async function main() {
   // Configure the local strategy for use by Passport.
   passport.use(new Strategy(
     async(username, password, done) => {
-      const sql = `SELECT * FROM accounts WHERE email = "${username}"`;
+      const sql = `SELECT * FROM accounts WHERE email = "${username}" AND active = 1`;
       const [rows] = await db.execute(sql);
       if(rows.length === 0) done(null, false)
       else {
@@ -105,7 +105,7 @@ async function main() {
     FROM characters c
     INNER JOIN races r ON c.race = r.id
     INNER JOIN ranks k ON c.rank = k.id
-    WHERE c.account = ${req.user.id};`;
+    WHERE c.account = ${req.user.id} AND c.active = 1;`;
     const [rows] = await db.execute(sql);
     const characters = await Promise.all(rows.map(async row => {
       const character = characterSerializer(row);
