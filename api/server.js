@@ -122,6 +122,14 @@ async function main() {
     res.end(JSON.stringify({ characters }, null, 3));
   });
   
+  app.get('/races', ensureLoggedIn('/auth/'), async(req, res) => {
+    const sql = `SELECT * FROM races`;
+    const [rows] = await db.execute(sql);
+    const races = rows;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ races }, null, 3));
+  });
+
   const server = app.listen(3000);
   io.listen(server);
 }
