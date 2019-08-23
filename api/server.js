@@ -123,11 +123,15 @@ async function main() {
   });
   
   app.get('/races', ensureLoggedIn('/auth/'), async(req, res) => {
-    const sql = `SELECT * FROM races`;
-    const [rows] = await db.execute(sql);
-    const races = rows;
+    const [races] = await db.execute(`SELECT * FROM races`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ races }, null, 3));
+  });
+
+  app.get('/ranks', ensureLoggedIn('/auth/'), async(req, res) => {
+    const [ranks] = await db.execute(`SELECT * FROM ranks`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ranks }, null, 3));
   });
 
   const server = app.listen(3000);
