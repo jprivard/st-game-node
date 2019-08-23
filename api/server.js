@@ -49,6 +49,7 @@ async function main() {
   
   // Configure view engine to render EJS templates.
   app.use(express.static(__dirname + '/static'));
+  app.use(express.json());
   app.use(require('body-parser').urlencoded({ extended: true }));
   app.use(require('express-session')({ secret: 'keyboard cat', resave: false, saveUninitialized: false }));
   app.use(passport.initialize());
@@ -101,25 +102,19 @@ async function main() {
   });
 
   app.get('/characters', ensureLoggedIn('/auth/'), async(req, res) => {
-    const sql = `SELECT c.id, k.id as rank_id, k.text as rank_text, c.firstName, c.lastName, c.sdob, c.race as race_id, r.text as race_text
-    FROM characters c
-    INNER JOIN races r ON c.race = r.id
-    INNER JOIN ranks k ON c.rank = k.id
-    WHERE c.account = ${req.user.id} AND c.active = 1;`;
-    const [rows] = await db.execute(sql);
-    const characters = await Promise.all(rows.map(async row => {
-      const character = characterSerializer(row);
-      const sql = `SELECT p.text, s.name, a.active, a.start, a.end FROM assignments a
-      INNER JOIN ships s ON s.id = a.ship
-      INNER JOIN positions p ON p.id = a.position
-      WHERE a.character = ${character.id}
-      ORDER BY a.start DESC;`;
-      const [rows] = await db.execute(sql);
-      character.assignments = assignmentsSerializer(rows);
-      return character;
-    }));
+    const characters = await getCharacters(req, db);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ characters }, null, 3));
+  });
+
+  app.post('/characters', ensureLoggedIn('/auth/'), async(req, res) => {
+    const sql = `INSERT INTO characters (account, firstName, lastName, sdob, race, rank)
+    VALUES (${req.user.id}, '${req.body.firstName}', '${req.body.lastName}',
+    '${req.body.stardateOfBirth}', ${req.body.race}, ${req.body.rank});`;
+    const [result] = await db.execute(sql);
+    const character = await getCharacters(req, db, `AND c.id = ${result.insertId}`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ character }, null, 3));
   });
   
   app.get('/races', ensureLoggedIn('/auth/'), async(req, res) => {
@@ -136,6 +131,27 @@ async function main() {
 
   const server = app.listen(3000);
   io.listen(server);
+}
+
+const getCharacters = async(req, db, condition = '') => {
+  const sql = `SELECT c.id, k.id as rank_id, k.text as rank_text, c.firstName, c.lastName, c.sdob, c.race as race_id, r.text as race_text
+  FROM characters c
+  INNER JOIN races r ON c.race = r.id
+  INNER JOIN ranks k ON c.rank = k.id
+  WHERE c.account = ${req.user.id} ${condition} AND c.active = 1;`;
+  const [rows] = await db.execute(sql);
+  const characters = await Promise.all(rows.map(async row => {
+    const character = characterSerializer(row);
+    const sql = `SELECT p.text, s.name, a.active, a.start, a.end FROM assignments a
+    INNER JOIN ships s ON s.id = a.ship
+    INNER JOIN positions p ON p.id = a.position
+    WHERE a.character = ${character.id}
+    ORDER BY a.start DESC;`;
+    const [rows] = await db.execute(sql);
+    character.assignments = assignmentsSerializer(rows);
+    return character;
+  }));
+  return characters;
 }
 
 const assignmentsSerializer = rows => {
