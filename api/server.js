@@ -13,7 +13,7 @@ const cors = require('cors')
 
 async function main() {
   // Configure MySQL Connection
-  const db = await mysql.createConnection(environment.mysql);
+  const db = await mysql.createPool(environment.mysql);
   db.timeout = 0;
   
   // Configure the local strategy for use by Passport.
@@ -109,12 +109,23 @@ async function main() {
 
   app.post('/characters', ensureLoggedIn('/auth/'), async(req, res) => {
     const sql = `INSERT INTO characters (account, firstName, lastName, sdob, race, rank)
-    VALUES (${req.user.id}, '${req.body.firstName}', '${req.body.lastName}',
-    '${req.body.stardateOfBirth}', ${req.body.race}, ${req.body.rank});`;
+      VALUES (${req.user.id}, '${req.body.firstName}', '${req.body.lastName}',
+      '${req.body.stardateOfBirth}', ${req.body.race}, ${req.body.rank});`;
     const [result] = await db.execute(sql);
     const character = await getCharacters(req, db, `AND c.id = ${result.insertId}`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ character }, null, 3));
+  });
+
+  app.post('/auth/character', ensureLoggedIn('/auth/'), async(req, res) => {
+    const sql = `UPDATE accounts 
+      SET selectedCharacter = ${req.body.selectedCharacter}
+      WHERE id = ${ req.user.id }`;
+      await db.execute(sql);
+      const user = req.user;
+      req.user.selectedCharacter = req.body.selectedCharacter;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ user }, null, 3));  
   });
   
   app.get('/races', ensureLoggedIn('/auth/'), async(req, res) => {
@@ -129,24 +140,47 @@ async function main() {
     res.end(JSON.stringify({ ranks }, null, 3));
   });
 
+  app.get('/missions', ensureLoggedIn('/auth/'), async(req, res) => {
+    const [rows] = await db.execute(`SELECT m.* FROM missions m
+      INNER JOIN groups g ON g.mission = m.id
+      INNER JOIN character_groups cg ON cg.group = g.id
+      WHERE cg.character = ${ req.user.selectedCharacter }
+      ORDER BY m.lastModified DESC;`);
+    const missions = await Promise.all(rows.map(async row => {
+      const mission = missionSerializer(row);
+      const [rows1] = await db.execute(`SELECT c.* FROM groups g 
+        INNER JOIN character_groups cg ON cg.group = g.id
+        INNER JOIN characters c ON c.id = cg.character
+        WHERE g.mission = ${ mission.id };`);
+      mission.participants = participantsSerializer(rows1);
+      const [rows2] = await db.execute(`SELECT COUNT(DISTINCT mr.message) as unread
+      FROM groups g INNER JOIN message_recipients mr ON mr.group = g.id
+      WHERE mr.read = 0 AND g.mission = ${ mission.id } AND mr.recipient = ${ req.user.selectedCharacter };`);
+      mission.unreadMessages = rows2[0].unread;
+      return mission;
+    }));
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ missions }, null, 3));
+  });
+
   const server = app.listen(3000);
   io.listen(server);
 }
 
 const getCharacters = async(req, db, condition = '') => {
   const sql = `SELECT c.id, k.id as rank_id, k.text as rank_text, c.firstName, c.lastName, c.sdob, c.race as race_id, r.text as race_text
-  FROM characters c
-  INNER JOIN races r ON c.race = r.id
-  INNER JOIN ranks k ON c.rank = k.id
-  WHERE c.account = ${req.user.id} ${condition} AND c.active = 1;`;
+    FROM characters c
+    INNER JOIN races r ON c.race = r.id
+    INNER JOIN ranks k ON c.rank = k.id
+    WHERE c.account = ${req.user.id} ${condition} AND c.active = 1;`;
   const [rows] = await db.execute(sql);
   const characters = await Promise.all(rows.map(async row => {
     const character = characterSerializer(row);
     const sql = `SELECT p.text, s.name, a.active, a.start, a.end FROM assignments a
-    INNER JOIN ships s ON s.id = a.ship
-    INNER JOIN positions p ON p.id = a.position
-    WHERE a.character = ${character.id}
-    ORDER BY a.start DESC;`;
+      INNER JOIN ships s ON s.id = a.ship
+      INNER JOIN positions p ON p.id = a.position
+      WHERE a.character = ${character.id}
+      ORDER BY a.start DESC;`;
     const [rows] = await db.execute(sql);
     character.assignments = assignmentsSerializer(rows);
     return character;
@@ -175,6 +209,28 @@ const characterSerializer = row => ({
   race: row.race_text,
   stardateOfBirth: row.sdob,
   assignments : []
+});
+
+const participantsSerializer = rows => {
+  const participants = [];
+  rows.forEach(row => {
+    participants.push({
+      id: row.id,
+      firstName: row.firstName,
+      lastName: row.lastName,
+    });
+  });
+  return participants;
+}
+
+const missionSerializer = row => ({
+  id: row.id,
+  name: row.name,
+  description: row.description,
+  active: row.active,
+  lastModified: row.lastModified,
+  unreadMessages: 0,
+  participants: [],
 });
 
 main();

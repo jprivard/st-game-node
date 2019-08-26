@@ -4,7 +4,8 @@ class User {
     this.email = '';
     this.firstName = '';
     this.lastName = '';
-    this.type = '';  
+    this.type = '';
+    this.selectedCharacter = '';
   }
 }
 
@@ -13,9 +14,10 @@ class UserFactory {
     const user = new User();
     user.id = row.id;
     user.email = row.email;
-    user.firstName = row.first_name;
-    user.lastName = row.last_name;
+    user.firstName = row.firstName;
+    user.lastName = row.lastName;
     user.type = row.type;
+    user.selectedCharacter = row.selectedCharacter;
     return user;
   }
 }
