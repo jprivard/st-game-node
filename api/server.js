@@ -94,7 +94,7 @@ async function main() {
     req.logout();
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ }, null, 3));    
-});
+  });
   
   app.get('/auth/profile', ensureLoggedIn('/auth/'), (req, res) => {
     res.setHeader('Content-Type', 'application/json');
@@ -161,6 +161,39 @@ async function main() {
     }));
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ missions }, null, 3));
+  });
+
+  app.get('/mission/:id/participants', ensureLoggedIn('/auth/'), async(req, res) => {
+    const [participants] = await db.execute(`SELECT c.id, c.firstName, c.lastName, r1.text AS race,
+      r2.text AS rank, p.text as \`position\`, s.name AS ship FROM groups g 
+      INNER JOIN character_groups cg ON cg.group = g.id
+      INNER JOIN characters c ON c.id = cg.character
+      INNER JOIN races r1 ON r1.id = c.race
+      INNER JOIN ranks r2 ON r2.id = c.rank
+      LEFT JOIN assignments a ON a.character = c.id AND a.active = 1
+      LEFT JOIN positions p ON p.id = a.position
+      LEFT JOIN ships s ON s.id = a.ship
+      WHERE g.mission = ${ req.params.id };`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ participants }, null, 3));
+  });
+
+  app.get('/mission/:id/messages', ensureLoggedIn('/auth/'), async(req, res) => {
+    const [messages] = await db.execute(`SELECT m.id, m.character, m.message, 
+      m.creationDate, m.type, mr.read FROM message_recipients mr
+      INNER JOIN messages m ON m.id = mr.message
+      INNER JOIN groups g on g.id = mr.group
+      WHERE mr.recipient = ${ req.user.selectedCharacter } AND g.mission = ${ req.params.id };`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ messages }, null, 3));
+  });
+
+  app.get('/mission/:mission/message/:message/read', ensureLoggedIn('/auth/'), async(req, res) => {
+    await db.execute(`UPDATE message_recipients SET \`read\` = 1 
+      WHERE message = ${ req.params.message }
+      AND recipient = ${ req.user.selectedCharacter };`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ message: 'read' }, null, 3));
   });
 
   const server = app.listen(3000);
