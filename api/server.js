@@ -208,7 +208,7 @@ async function main() {
     const [participants] = await db.execute(`SELECT \`character\` FROM character_groups
       WHERE \`group\` = ${ req.body.group }`);
     const [{insertId}] = await db.execute(`INSERT INTO messages (\`character\`, \`message\`, \`type\`)
-      VALUES (${ req.user.id }, "${ req.body.message }", ${ req.body.type });`);
+      VALUES (${ req.user.selectedCharacter }, "${ req.body.message }", ${ req.body.type });`);
     await Promise.all(participants.map(async p => {
       const sql = `INSERT INTO message_recipients (\`recipient\`, \`group\`, \`message\`)
         VALUES (${ p.character }, ${ req.body.group }, ${ insertId })`;
