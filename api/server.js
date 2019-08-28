@@ -178,6 +178,14 @@ async function main() {
     res.end(JSON.stringify({ participants }, null, 3));
   });
 
+  app.get('/mission/:id/groups', ensureLoggedIn('/auth/'), async(req, res) => {
+    const [groups] = await db.execute(`SELECT g.id, g.name FROM groups g
+    INNER JOIN character_groups cg ON cg.group = g.id
+    WHERE cg.character = ${ req.user.selectedCharacter } AND g.mission = ${ req.params.id } AND g.active = 1;`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ groups }, null, 3));
+  });
+
   app.get('/mission/:id/messages', ensureLoggedIn('/auth/'), async(req, res) => {
     const [messages] = await db.execute(`SELECT m.id, m.character, m.message, 
       m.creationDate, m.type, mr.read FROM message_recipients mr
@@ -194,6 +202,25 @@ async function main() {
       AND recipient = ${ req.user.selectedCharacter };`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ message: 'read' }, null, 3));
+  });
+
+  app.post('/mission/:mission/message/', ensureLoggedIn('/auth/'), async(req, res) => {
+    const [participants] = await db.execute(`SELECT \`character\` FROM character_groups
+      WHERE \`group\` = ${ req.body.group }`);
+    const [{insertId}] = await db.execute(`INSERT INTO messages (\`character\`, \`message\`, \`type\`)
+      VALUES (${ req.user.id }, "${ req.body.message }", ${ req.body.type });`);
+    await Promise.all(participants.map(async p => {
+      const sql = `INSERT INTO message_recipients (\`recipient\`, \`group\`, \`message\`)
+        VALUES (${ p.character }, ${ req.body.group }, ${ insertId })`;
+      await db.execute(sql);
+      return;
+    }));
+    const [message] = await db.execute(`SELECT m.id, m.character, m.message, 
+      m.creationDate, m.type, mr.read FROM message_recipients mr
+      INNER JOIN messages m ON m.id = mr.message
+      WHERE mr.recipient = ${ req.user.selectedCharacter } AND m.id = ${ insertId };`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ message }, null, 3));
   });
 
   const server = app.listen(3000);
