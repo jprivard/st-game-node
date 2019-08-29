@@ -7,20 +7,43 @@ const app = express();
 const http = require('http').Server(app);
 const io = require('socket.io')(http);
 const UserFactory = require('./models/user').factory;
-const ensureLoggedIn = require('connect-ensure-login').ensureLoggedIn;
 const environment = require('../environments/environment.local');
-const cors = require('cors')
+const cors = require('cors');
 
-async function main() {
-  // Configure MySQL Connection
-  const db = await mysql.createPool(environment.mysql);
-  db.timeout = 0;
-  
+const ensureLoggedIn = () => {
+  return (req, res, next) => {
+    if (req.user && req.user.id > 0) {
+      next();
+    } else {
+      res.status(401).send('Server requires authentication')
+      endDb()(req, res, next);
+    }
+  }
+}
+
+const createDb = () => {
+  return async(req, res, next) => {
+    req.db = await mysql.createConnection(environment.mysql);
+    next();
+  }
+}
+
+
+const endDb = () => {
+  return async(req, res, next) => {
+    req.db.end();
+    next();
+  }
+}
+
+async function main() {  
   // Configure the local strategy for use by Passport.
   passport.use(new Strategy(
     async(username, password, done) => {
+      const db = await mysql.createConnection(environment.mysql);
       const sql = `SELECT * FROM accounts WHERE email = "${username}" AND active = 1`;
       const [rows] = await db.execute(sql);
+      db.end();
       if(rows.length === 0) done(null, false)
       else {
         const isAuthenticated = await bcrypt.compare(password, rows[0].password);        
@@ -41,8 +64,10 @@ async function main() {
     done(null, user.id);
   });
   passport.deserializeUser(async(id, cb) => {
+    const db = await mysql.createConnection(environment.mysql);
     const sql = `SELECT * FROM accounts WHERE id = "${id}"`;
     const [rows] = await db.execute(sql);
+    db.end();
     if (rows.length > 0) cb(null, UserFactory.fromDatabase(rows[0]));
     else cb(null, false);
   });
@@ -66,94 +91,118 @@ async function main() {
   });
   
   // Define routes.
-  app.get('/auth/', function(req, res) {
+  app.get('/auth/', function(req, res, next) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ user: req.user }, null, 3));
   });
 
-  app.post('/auth/login', (req, res, next) => {
+  app.post('/auth/login', createDb(), (req, res, next) => {
     passport.authenticate('local', (err, user, info) => {
       if (err) return next(err);
       if (!user) {
         res.status(401);
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ error: 'AUTH.INVALID' }, null, 3));  
+        next();
         return res;
       }
       req.logIn(user, async(err) => {
         if (err) return next(err);
         const sql = `UPDATE accounts SET lastConnection='${ (new Date(Date.now())).toISOString().replace('T', ' ').split('.')[0] }' WHERE id = ${ user.id };`;
-        await db.execute(sql);
+        await req.db.execute(sql);
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ user: user }, null, 3));    
+        res.end(JSON.stringify({ user: user }, null, 3));
+        next();
       });
-    })(req, res, next);  
-  });
+    })(req, res, next);
+  }, endDb());
     
-  app.get('/auth/logout', (req, res) => {
+  app.get('/auth/logout', createDb(), (req, res, next) => {
     req.logout();
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ }, null, 3));    
-  });
+    res.end(JSON.stringify({ }, null, 3)); 
+    next();
+  }, endDb());
   
-  app.get('/auth/profile', ensureLoggedIn('/auth/'), (req, res) => {
+  app.get('/auth/profile', ensureLoggedIn(), (req, res, next) => {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ user: req.user }, null, 3));
+    next();
   });
 
-  app.get('/characters', ensureLoggedIn('/auth/'), async(req, res) => {
-    const characters = await getCharacters(req, db);
+  app.post('/auth/create', createDb(), async(req, res, next) => {
+    const hash = await bcrypt.hash(req.body.password, 10);
+    const sql = `UPDATE accounts SET \`password\`= "${ hash }"
+      WHERE \`email\` = "${ req.body.username }" AND \`password\` = "";`;
+    const [{changedRows}] = await req.db.execute(sql);
+    res.setHeader('Content-Type', 'application/json');
+    if (changedRows === 0) {
+      res.status(404);
+      res.end(JSON.stringify({ error: 'AUTH.CREATE_INVALID' }, null, 3));  
+    } else {
+      res.end(JSON.stringify({ message: 'success'}, null, 3));  
+    }
+    next();
+  }, endDb());
+
+  app.get('/characters', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const characters = await getCharacters(req, req.db);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ characters }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.post('/characters', ensureLoggedIn('/auth/'), async(req, res) => {
+  app.post('/characters', ensureLoggedIn(), createDb(), async(req, res, next) => {
     const sql = `INSERT INTO characters (account, firstName, lastName, sdob, race, rank)
       VALUES (${req.user.id}, '${req.body.firstName}', '${req.body.lastName}',
       '${req.body.stardateOfBirth}', ${req.body.race}, ${req.body.rank});`;
-    const [result] = await db.execute(sql);
+    const [result] = await req.cute(sql);
     const character = await getCharacters(req, db, `AND c.id = ${result.insertId}`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ character }, null, 3));
-  });
+    next()
+  }, endDb());
 
-  app.post('/auth/character', ensureLoggedIn('/auth/'), async(req, res) => {
+  app.post('/auth/character', ensureLoggedIn(), createDb(), async(req, res, next) => {
     const sql = `UPDATE accounts 
       SET selectedCharacter = ${req.body.selectedCharacter}
       WHERE id = ${ req.user.id }`;
-      await db.execute(sql);
+      await req.db.execute(sql);
       const user = req.user;
       req.user.selectedCharacter = req.body.selectedCharacter;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ user }, null, 3));  
-  });
+      res.end(JSON.stringify({ user }, null, 3));
+      next();
+  }, endDb());
   
-  app.get('/races', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [races] = await db.execute(`SELECT * FROM races`);
+  app.get('/races', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [races] = await req.db.execute(`SELECT * FROM races`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ races }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.get('/ranks', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [ranks] = await db.execute(`SELECT * FROM ranks`);
+  app.get('/ranks', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [ranks] = await req.db.execute(`SELECT * FROM ranks`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ ranks }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.get('/missions', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [rows] = await db.execute(`SELECT m.* FROM missions m
+  app.get('/missions', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [rows] = await req.db.execute(`SELECT m.* FROM missions m
       INNER JOIN groups g ON g.mission = m.id
       INNER JOIN character_groups cg ON cg.group = g.id
       WHERE cg.character = ${ req.user.selectedCharacter }
       ORDER BY m.lastModified DESC;`);
     const missions = await Promise.all(rows.map(async row => {
       const mission = missionSerializer(row);
-      const [rows1] = await db.execute(`SELECT c.* FROM groups g 
+      const [rows1] = await req.db.execute(`SELECT c.* FROM groups g 
         INNER JOIN character_groups cg ON cg.group = g.id
         INNER JOIN characters c ON c.id = cg.character
         WHERE g.mission = ${ mission.id };`);
       mission.participants = participantsSerializer(rows1);
-      const [rows2] = await db.execute(`SELECT COUNT(DISTINCT mr.message) as unread
+      const [rows2] = await req.db.execute(`SELECT COUNT(DISTINCT mr.message) as unread
       FROM groups g INNER JOIN message_recipients mr ON mr.group = g.id
       WHERE mr.read = 0 AND g.mission = ${ mission.id } AND mr.recipient = ${ req.user.selectedCharacter };`);
       mission.unreadMessages = rows2[0].unread;
@@ -161,10 +210,11 @@ async function main() {
     }));
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ missions }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.get('/mission/:id/participants', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [participants] = await db.execute(`SELECT c.id, c.firstName, c.lastName, r1.text AS race,
+  app.get('/mission/:id/participants', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [participants] = await req.db.execute(`SELECT c.id, c.firstName, c.lastName, r1.text AS race,
       r2.text AS rank, p.text as \`position\`, s.name AS ship FROM groups g 
       INNER JOIN character_groups cg ON cg.group = g.id
       INNER JOIN characters c ON c.id = cg.character
@@ -176,52 +226,57 @@ async function main() {
       WHERE g.mission = ${ req.params.id };`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ participants }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.get('/mission/:id/groups', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [groups] = await db.execute(`SELECT g.id, g.name FROM groups g
+  app.get('/mission/:id/groups', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [groups] = await req.db.execute(`SELECT g.id, g.name FROM groups g
     INNER JOIN character_groups cg ON cg.group = g.id
     WHERE cg.character = ${ req.user.selectedCharacter } AND g.mission = ${ req.params.id } AND g.active = 1;`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ groups }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.get('/mission/:id/messages', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [messages] = await db.execute(`SELECT m.id, m.character, m.message, 
+  app.get('/mission/:id/messages', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [messages] = await req.db.execute(`SELECT m.id, m.character, m.message, 
       m.creationDate, m.type, mr.read FROM message_recipients mr
       INNER JOIN messages m ON m.id = mr.message
       INNER JOIN groups g on g.id = mr.group
       WHERE mr.recipient = ${ req.user.selectedCharacter } AND g.mission = ${ req.params.id };`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ messages }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.get('/mission/:mission/message/:message/read', ensureLoggedIn('/auth/'), async(req, res) => {
-    await db.execute(`UPDATE message_recipients SET \`read\` = 1 
+  app.get('/mission/:mission/message/:message/read', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    await req.db.execute(`UPDATE message_recipients SET \`read\` = 1 
       WHERE message = ${ req.params.message }
       AND recipient = ${ req.user.selectedCharacter };`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ message: 'read' }, null, 3));
-  });
+    next();
+  }, endDb());
 
-  app.post('/mission/:mission/message/', ensureLoggedIn('/auth/'), async(req, res) => {
-    const [participants] = await db.execute(`SELECT \`character\` FROM character_groups
+  app.post('/mission/:mission/message/', ensureLoggedIn(), createDb(), async(req, res, next) => {
+    const [participants] = await req.db.execute(`SELECT \`character\` FROM character_groups
       WHERE \`group\` = ${ req.body.group }`);
-    const [{insertId}] = await db.execute(`INSERT INTO messages (\`character\`, \`message\`, \`type\`)
+    const [{insertId}] = await req.db.execute(`INSERT INTO messages (\`character\`, \`message\`, \`type\`)
       VALUES (${ req.user.selectedCharacter }, "${ req.body.message }", ${ req.body.type });`);
     await Promise.all(participants.map(async p => {
       const sql = `INSERT INTO message_recipients (\`recipient\`, \`group\`, \`message\`)
         VALUES (${ p.character }, ${ req.body.group }, ${ insertId })`;
-      await db.execute(sql);
+      await req.db.execute(sql);
       return;
     }));
-    const [message] = await db.execute(`SELECT m.id, m.character, m.message, 
+    const [message] = await req.db.execute(`SELECT m.id, m.character, m.message, 
       m.creationDate, m.type, mr.read FROM message_recipients mr
       INNER JOIN messages m ON m.id = mr.message
       WHERE mr.recipient = ${ req.user.selectedCharacter } AND m.id = ${ insertId };`);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ message }, null, 3));
-  });
+    next();
+  }, endDb());
 
   const server = app.listen(3000);
   io.listen(server);
@@ -233,7 +288,7 @@ const getCharacters = async(req, db, condition = '') => {
     INNER JOIN races r ON c.race = r.id
     INNER JOIN ranks k ON c.rank = k.id
     WHERE c.account = ${req.user.id} ${condition} AND c.active = 1;`;
-  const [rows] = await db.execute(sql);
+  const [rows] = await req.db.execute(sql);
   const characters = await Promise.all(rows.map(async row => {
     const character = characterSerializer(row);
     const sql = `SELECT p.text, s.name, a.active, a.start, a.end FROM assignments a
@@ -241,7 +296,7 @@ const getCharacters = async(req, db, condition = '') => {
       INNER JOIN positions p ON p.id = a.position
       WHERE a.character = ${character.id}
       ORDER BY a.start DESC;`;
-    const [rows] = await db.execute(sql);
+    const [rows] = await req.db.execute(sql);
     character.assignments = assignmentsSerializer(rows);
     return character;
   }));
